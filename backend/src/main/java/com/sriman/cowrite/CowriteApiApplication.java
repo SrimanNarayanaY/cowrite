@@ -1,4 +1,4 @@
-package sriman.cowrite_api;
+package com.sriman.cowrite;
 
 import io.github.cdimascio.dotenv.Dotenv;
 import org.springframework.boot.SpringApplication;
