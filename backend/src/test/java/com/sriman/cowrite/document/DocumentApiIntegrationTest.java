@@ -46,8 +46,12 @@ class DocumentApiIntegrationTest {
 
 		mockMvc.perform(get("/api/documents"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$", hasSize(1)))
-				.andExpect(jsonPath("$[0].title").value("Design notes"));
+				.andExpect(jsonPath("$.content", hasSize(1)))
+				.andExpect(jsonPath("$.content[0].title").value("Design notes"))
+				.andExpect(jsonPath("$.page").value(0))
+				.andExpect(jsonPath("$.size").value(10))
+				.andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.totalPages").value(1));
 
 		mockMvc.perform(get("/api/documents/" + id))
 				.andExpect(status().isOk())
@@ -77,6 +81,33 @@ class DocumentApiIntegrationTest {
 						.content("{\"title\":\"\"}"))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.fieldErrors.title").exists());
+	}
+
+	@Test
+	void paginatesDocuments() throws Exception {
+		for (int i = 0; i < 3; i++) {
+			mockMvc.perform(post("/api/documents")
+							.contentType(MediaType.APPLICATION_JSON)
+							.content("{\"title\":\"Doc " + i + "\"}"))
+					.andExpect(status().isCreated());
+		}
+
+		mockMvc.perform(get("/api/documents?page=0&size=2"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content", hasSize(2)))
+				.andExpect(jsonPath("$.page").value(0))
+				.andExpect(jsonPath("$.size").value(2))
+				.andExpect(jsonPath("$.totalElements").value(3))
+				.andExpect(jsonPath("$.totalPages").value(2))
+				.andExpect(jsonPath("$.first").value(true))
+				.andExpect(jsonPath("$.last").value(false));
+
+		mockMvc.perform(get("/api/documents?page=1&size=2"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content", hasSize(1)))
+				.andExpect(jsonPath("$.page").value(1))
+				.andExpect(jsonPath("$.first").value(false))
+				.andExpect(jsonPath("$.last").value(true));
 	}
 
 }

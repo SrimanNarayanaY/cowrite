@@ -1,9 +1,13 @@
 package com.sriman.cowrite.document;
 
+import com.sriman.cowrite.common.web.PageResponse;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -17,7 +21,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/documents")
@@ -38,10 +41,13 @@ public class DocumentController {
 		return ResponseEntity.created(location).body(created);
 	}
 
+	/**
+	 * GET /api/documents?page=0&size=10&sort=createdAt,desc
+	 */
 	@GetMapping
-	public List<DocumentResponse> list() {
-
-		return documentService.list();
+	public PageResponse<DocumentResponse> list(
+			@PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+		return documentService.list(pageable);
 	}
 
 	@GetMapping("/{id}")
@@ -57,6 +63,7 @@ public class DocumentController {
 	@DeleteMapping("/{id}")
 	public ResponseEntity<Void> delete(@PathVariable Long id) {
 		documentService.delete(id);
+
 		return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
 	}
 

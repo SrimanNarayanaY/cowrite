@@ -1,13 +1,14 @@
 package com.sriman.cowrite.document;
 
+import com.sriman.cowrite.common.web.PageResponse;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
 import com.sriman.cowrite.document.exception.DocumentNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -25,16 +26,18 @@ public class DocumentService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<DocumentResponse> list() {
-		return documentRepository.findAll()
-				.stream()
-				.map(DocumentResponse::from)
-				.toList();
+	public PageResponse<DocumentResponse> list(Pageable pageable) {
+		Page<Document> page = documentRepository.findAllWithOwner(pageable);
+
+		return PageResponse.from(page, DocumentResponse::from);
 	}
 
 	@Transactional(readOnly = true)
 	public DocumentResponse getById(Long id) {
-		return DocumentResponse.from(findDocument(id));
+		return DocumentResponse.from(
+				documentRepository.findWithOwnerById(id)
+						.orElseThrow(() -> new DocumentNotFoundException(id))
+		);
 	}
 
 	@Transactional

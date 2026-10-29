@@ -1,11 +1,15 @@
 package com.sriman.cowrite.document;
 
+import com.sriman.cowrite.common.web.PageResponse;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
 import com.sriman.cowrite.document.exception.DocumentNotFoundException;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -13,6 +17,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -37,10 +43,13 @@ class DocumentControllerTest {
 	@MockitoBean
 	private DocumentService documentService;
 
+	private static DocumentResponse sample() {
+		return new DocumentResponse(1L, "First doc", "hello", 5L, "owner@example.com", NOW, NOW);
+	}
+
 	@Test
 	void createsDocumentAndReturnsCreatedWithLocation() throws Exception {
-		given(documentService.create(any(DocumentRequest.class)))
-				.willReturn(new DocumentResponse(1L, "First doc", "hello", NOW, NOW));
+		given(documentService.create(any(DocumentRequest.class))).willReturn(sample());
 
 		mockMvc.perform(post("/api/documents")
 						.contentType(MediaType.APPLICATION_JSON)
@@ -80,14 +89,38 @@ class DocumentControllerTest {
 	}
 
 	@Test
-	void listsDocuments() throws Exception {
-		given(documentService.list())
-				.willReturn(List.of(new DocumentResponse(1L, "First doc", "hello", NOW, NOW)));
+	void listsDocumentsAsPage() throws Exception {
+		PageResponse<DocumentResponse> page =
+				new PageResponse<>(List.of(sample()), 0, 10, 1, 1, true, true);
+		given(documentService.list(any(Pageable.class))).willReturn(page);
 
 		mockMvc.perform(get("/api/documents"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.length()").value(1))
-				.andExpect(jsonPath("$[0].id").value(1));
+				.andExpect(jsonPath("$.content", hasSize(1)))
+				.andExpect(jsonPath("$.content[0].id").value(1))
+				.andExpect(jsonPath("$.content[0].ownerEmail").value("owner@example.com"))
+				.andExpect(jsonPath("$.page").value(0))
+				.andExpect(jsonPath("$.size").value(10))
+				.andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.totalPages").value(1))
+				.andExpect(jsonPath("$.first").value(true))
+				.andExpect(jsonPath("$.last").value(true));
+	}
+
+	@Test
+	void passesPageAndSizeToService() throws Exception {
+		given(documentService.list(any(Pageable.class)))
+				.willReturn(new PageResponse<>(List.of(), 2, 5, 0, 0, false, true));
+
+		mockMvc.perform(get("/api/documents?page=2&size=5"))
+				.andExpect(status().isOk());
+
+		ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+		then(documentService).should().list(captor.capture());
+
+		assertThat(captor.getValue().getPageNumber()).isEqualTo(2);
+		assertThat(captor.getValue().getPageSize()).isEqualTo(5);
+		assertThat(captor.getValue().getSort()).isEqualTo(Sort.by(Sort.Direction.DESC, "createdAt"));
 	}
 
 	@Test
@@ -102,8 +135,7 @@ class DocumentControllerTest {
 
 	@Test
 	void updatesDocument() throws Exception {
-		given(documentService.update(eq(1L), any(DocumentRequest.class)))
-				.willReturn(new DocumentResponse(1L, "Renamed", "body", NOW, NOW));
+		given(documentService.update(eq(1L), any(DocumentRequest.class))).willReturn(sample());
 
 		mockMvc.perform(put("/api/documents/1")
 						.contentType(MediaType.APPLICATION_JSON)
@@ -111,7 +143,7 @@ class DocumentControllerTest {
 								{"title":"Renamed","content":"body"}
 								"""))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.title").value("Renamed"));
+				.andExpect(jsonPath("$.title").value("First doc"));
 	}
 
 	@Test

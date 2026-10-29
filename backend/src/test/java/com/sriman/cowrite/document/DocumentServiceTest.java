@@ -9,8 +9,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +53,24 @@ class DocumentServiceTest {
 	}
 
 	@Test
+	void listMapsPageToResponse() {
+		Document document = new Document();
+		document.setId(1L);
+		document.setTitle("Title");
+		given(documentRepository.findAllWithOwner(any()))
+				.willReturn(new PageImpl<>(List.of(document), PageRequest.of(0, 10), 1));
+
+		var page = documentService.list(PageRequest.of(0, 10));
+
+		assertThat(page.content()).hasSize(1);
+		assertThat(page.content().getFirst().title()).isEqualTo("Title");
+		assertThat(page.totalElements()).isEqualTo(1);
+		assertThat(page.totalPages()).isEqualTo(1);
+		assertThat(page.first()).isTrue();
+		assertThat(page.last()).isTrue();
+	}
+
+	@Test
 	void updateChangesExistingDocument() {
 		Document existing = new Document();
 		existing.setId(1L);
@@ -66,7 +87,7 @@ class DocumentServiceTest {
 
 	@Test
 	void getByIdThrowsWhenMissing() {
-		given(documentRepository.findById(99L)).willReturn(Optional.empty());
+		given(documentRepository.findWithOwnerById(99L)).willReturn(Optional.empty());
 
 		assertThatThrownBy(() -> documentService.getById(99L))
 				.isInstanceOf(DocumentNotFoundException.class)
