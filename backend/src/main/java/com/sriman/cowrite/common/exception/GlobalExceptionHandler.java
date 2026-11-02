@@ -1,5 +1,7 @@
 package com.sriman.cowrite.common.exception;
 
+import com.sriman.cowrite.auth.exception.EmailAlreadyRegisteredException;
+import com.sriman.cowrite.auth.exception.InvalidCredentialsException;
 import com.sriman.cowrite.document.exception.DocumentNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +20,20 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<ApiError> handleNotFound(DocumentNotFoundException ex) {
 		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
 				ApiError.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage())
+		);
+	}
+
+	@ExceptionHandler(EmailAlreadyRegisteredException.class)
+	public ResponseEntity<ApiError> handleConflict(EmailAlreadyRegisteredException ex) {
+		return ResponseEntity.status(HttpStatus.CONFLICT).body(
+				ApiError.of(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage())
+		);
+	}
+
+	@ExceptionHandler(InvalidCredentialsException.class)
+	public ResponseEntity<ApiError> handleInvalidCredentials(InvalidCredentialsException ex) {
+		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+				ApiError.of(HttpStatus.UNAUTHORIZED.value(), "Unauthorized", ex.getMessage())
 		);
 	}
 

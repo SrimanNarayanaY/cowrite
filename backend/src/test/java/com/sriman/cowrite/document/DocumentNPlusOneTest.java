@@ -16,6 +16,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Transactional
 class DocumentNPlusOneTest {
 
-	private static final int DOCUMENT_COUNT = 10;
+	private static final int OWNER_COUNT = 10;
+	private static final int DOCUMENTS_PER_OWNER = 10;
 
 	@Autowired
 	private DocumentRepository documentRepository;
@@ -49,13 +51,14 @@ class DocumentNPlusOneTest {
 	private EntityManagerFactory entityManagerFactory;
 
 	private Statistics statistics;
+	private final List<Long> ownerIds = new ArrayList<>();
 
 	@BeforeEach
 	void setUp() {
 		statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
 		statistics.setStatisticsEnabled(true);
 
-		seedDocumentsWithOwners(DOCUMENT_COUNT);
+		seed(OWNER_COUNT, DOCUMENTS_PER_OWNER);
 
 		entityManager.flush();
 		entityManager.clear();
@@ -70,55 +73,63 @@ class DocumentNPlusOneTest {
 				.toList();
 
 		long queries = statistics.getPrepareStatementCount();
-		System.out.printf("[N+1 BAD] %d documents -> %d queries (1 for documents + %d for owners)%n",
-				documents.size(), queries, documents.size());
+		System.out.printf("[N+1 BAD] %d documents / %d owners -> %d queries (+1 per owner)%n",
+				documents.size(), OWNER_COUNT, queries);
 
-		assertThat(ownerEmails).hasSize(DOCUMENT_COUNT);
-		assertThat(queries).isEqualTo(DOCUMENT_COUNT + 1);
+		assertThat(ownerEmails).hasSize(OWNER_COUNT * DOCUMENTS_PER_OWNER);
+		assertThat(queries).isEqualTo(1 + OWNER_COUNT);
 	}
 
 	@Test
 	void entityGraphLoadsOwnersInOneQuery() {
-		var page = documentService.list(
-				PageRequest.of(0, DOCUMENT_COUNT, Sort.by(Sort.Direction.DESC, "createdAt")));
+		Long ownerId = ownerIds.getFirst();
+
+		var page = documentService.list(ownerId,
+				PageRequest.of(0, DOCUMENTS_PER_OWNER, Sort.by(Sort.Direction.DESC, "createdAt")));
 
 		long queries = statistics.getPrepareStatementCount();
-		System.out.printf("[N+1 FIXED] %d documents -> %d queries (1 count + 1 join fetch)%n",
+		System.out.printf("[N+1 FIXED] page of %d documents -> %d queries (1 count + 1 join fetch)%n",
 				page.content().size(), queries);
 
-		assertThat(page.content()).hasSize(DOCUMENT_COUNT);
+		assertThat(page.content()).hasSize(DOCUMENTS_PER_OWNER);
 		assertThat(page.content())
-				.allSatisfy(dto -> assertThat(dto.ownerEmail()).endsWith("@example.com"));
+				.allSatisfy(dto -> assertThat(dto.ownerEmail()).isEqualTo("owner0@example.com"));
 		assertThat(queries).isEqualTo(2);
 	}
 
 	@Test
 	void getByIdAlsoLoadsOwnerInOneQuery() {
-		Long id = documentRepository.findAll().getFirst().getId();
+		Long ownerId = ownerIds.getFirst();
+		Long id = documentRepository.findAllByOwnerId(ownerId, PageRequest.of(0, 1))
+				.getContent().getFirst().getId();
+
 		entityManager.clear();
 		statistics.clear();
 
-		DocumentResponse response = documentService.getById(id);
+		DocumentResponse response = documentService.getById(id, ownerId);
 
 		long queries = statistics.getPrepareStatementCount();
 		System.out.printf("[N+1 FIXED] getById -> %d query%n", queries);
 
-		assertThat(response.ownerEmail()).isNotBlank();
+		assertThat(response.ownerEmail()).isEqualTo("owner0@example.com");
 		assertThat(queries).isEqualTo(1);
 	}
 
-	private void seedDocumentsWithOwners(int count) {
-		for (int i = 0; i < count; i++) {
+	private void seed(int owners, int documentsPerOwner) {
+		for (int i = 0; i < owners; i++) {
 			User owner = new User();
 			owner.setEmail("owner" + i + "@example.com");
 			owner.setPasswordHash("$2a$10$hash" + i);
 			userRepository.save(owner);
+			ownerIds.add(owner.getId());
 
-			Document document = new Document();
-			document.setTitle("Document " + i);
-			document.setContent("Body " + i);
-			document.setOwner(owner);
-			documentRepository.save(document);
+			for (int j = 0; j < documentsPerOwner; j++) {
+				Document document = new Document();
+				document.setTitle("Document " + i + "-" + j);
+				document.setContent("Body " + i + "-" + j);
+				document.setOwner(owner);
+				documentRepository.save(document);
+			}
 		}
 	}
 
