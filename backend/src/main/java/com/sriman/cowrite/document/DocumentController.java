@@ -3,6 +3,7 @@ package com.sriman.cowrite.document;
 import com.sriman.cowrite.common.web.PageResponse;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
+import com.sriman.cowrite.permission.PermissionService;
 import com.sriman.cowrite.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ import java.net.URI;
 public class DocumentController {
 
 	private final DocumentService documentService;
+	private final PermissionService permissionService;
 
 	@PostMapping
 	public ResponseEntity<DocumentResponse> create(@AuthenticationPrincipal User currentUser,
@@ -45,30 +47,35 @@ public class DocumentController {
 	}
 
 	/**
-	 * GET /api/documents?page=0&size=10&sort=createdAt,desc — only the caller's documents.
+	 * GET /api/documents?page=0&size=10&sort=createdAt,desc — owned plus shared documents.
 	 */
 	@GetMapping
 	public PageResponse<DocumentResponse> list(
 			@AuthenticationPrincipal User currentUser,
 			@PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
-		return documentService.list(currentUser.getId(), pageable);
+		return documentService.listAccessible(currentUser.getId(), pageable);
 	}
 
 	@GetMapping("/{id}")
 	public DocumentResponse getById(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
-		return documentService.getById(id, currentUser.getId());
+		permissionService.requireView(id, currentUser.getId());
+
+		return documentService.getById(id);
 	}
 
 	@PutMapping("/{id}")
 	public DocumentResponse update(@AuthenticationPrincipal User currentUser,
 								   @PathVariable Long id,
 								   @Valid @RequestBody DocumentRequest request) {
-		return documentService.update(id, request, currentUser.getId());
+		permissionService.requireEdit(id, currentUser.getId());
+
+		return documentService.update(id, request);
 	}
 
 	@DeleteMapping("/{id}")
 	public ResponseEntity<Void> delete(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
-		documentService.delete(id, currentUser.getId());
+		permissionService.requireOwner(id, currentUser.getId());
+		documentService.delete(id);
 
 		return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
 	}

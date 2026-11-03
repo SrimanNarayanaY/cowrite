@@ -1,0 +1,381 @@
+{
+  "info": {
+    "_postman_id": "5d0f5e1a-9c2b-4f7d-9a01-c0wr1terbac1",
+    "name": "Cowrite API - RBAC walkthrough",
+    "description": "End-to-end manual check of authentication, document ownership and viewer/editor sharing.\n\nRun the requests top to bottom with the Collection Runner. Tokens and the document id are captured automatically into collection variables, so no copy/paste is needed.\n\nExpected: viewer can read but gets 403 on update/delete/share; editor can update but gets 403 on delete/share; only the owner can delete and share.\n\nRe-running the collection is safe: register accepts 201 or 409, sharing is an idempotent upsert, and a fresh document is created on every run.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "password", "value": "password123" },
+    { "key": "ownerEmail", "value": "owner@test.com" },
+    { "key": "viewerEmail", "value": "viewer@test.com" },
+    { "key": "editorEmail", "value": "editor@test.com" },
+    { "key": "ownerToken", "value": "" },
+    { "key": "viewerToken", "value": "" },
+    { "key": "editorToken", "value": "" },
+    { "key": "docId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Auth",
+      "item": [
+        {
+          "name": "Register owner",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created (409 if the user already exists)', function () {",
+              "  pm.expect([201, 409]).to.include(pm.response.code);",
+              "});"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Register viewer",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created (409 if the user already exists)', function () {",
+              "  pm.expect([201, 409]).to.include(pm.response.code);",
+              "});"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{viewerEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Register editor",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created (409 if the user already exists)', function () {",
+              "  pm.expect([201, 409]).to.include(pm.response.code);",
+              "});"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{editorEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Login owner",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.collectionVariables.set('ownerToken', pm.response.json().token);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login viewer",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.collectionVariables.set('viewerToken', pm.response.json().token);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{viewerEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login editor",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.collectionVariables.set('editorToken', pm.response.json().token);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{editorEmail}}\",\n  \"password\": \"{{password}}\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Documents and sharing",
+      "item": [
+        {
+          "name": "Create document (owner)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+              "pm.collectionVariables.set('docId', pm.response.json().id);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"My doc\",\n  \"content\": \"hello\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents", "host": ["{{baseUrl}}"], "path": ["api", "documents"] }
+          }
+        },
+        {
+          "name": "Share with viewer (VIEWER)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.test('role is VIEWER', function () { pm.expect(pm.response.json().role).to.eql('VIEWER'); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{viewerEmail}}\",\n  \"role\": \"VIEWER\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Share with editor (EDITOR)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.test('role is EDITOR', function () { pm.expect(pm.response.json().role).to.eql('EDITOR'); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{editorEmail}}\",\n  \"role\": \"EDITOR\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Viewer reads document (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{viewerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Viewer updates document (403)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });",
+              "pm.test('problem is a permission error', function () { pm.expect(pm.response.json().status).to.eql(403); });"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{viewerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"hijack\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Viewer deletes document (403)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+            ] } }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{viewerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Viewer shares document (403)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{viewerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"x@test.com\",\n  \"role\": \"VIEWER\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Editor updates document (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.test('title changed', function () { pm.expect(pm.response.json().title).to.eql('edited'); });"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{editorToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"edited\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Editor deletes document (403)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('403 Forbidden', function () { pm.response.to.have.status(403); });"
+            ] } }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{editorToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Viewer lists documents (200, shared visible)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.test('shared document is listed', function () {",
+              "  pm.expect(pm.response.json().totalElements).to.be.at.least(1);",
+              "});"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{viewerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents", "host": ["{{baseUrl}}"], "path": ["api", "documents"] }
+          }
+        },
+        {
+          "name": "Owner shares with self (400)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('400 Bad Request', function () { pm.response.to.have.status(400); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"role\": \"VIEWER\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Owner shares with unknown email (404)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('404 Not Found', function () { pm.response.to.have.status(404); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"ghost@test.com\",\n  \"role\": \"VIEWER\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Owner upgrades viewer to EDITOR (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "pm.test('role is EDITOR', function () { pm.expect(pm.response.json().role).to.eql('EDITOR'); });"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{viewerEmail}}\",\n  \"role\": \"EDITOR\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}/share", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}", "share"] }
+          }
+        },
+        {
+          "name": "Upgraded viewer can now update (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{viewerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"promoted viewer edit\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Owner deletes document (204)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('204 No Content', function () { pm.response.to.have.status(204); });"
+            ] } }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ownerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        },
+        {
+          "name": "Viewer gets deleted document (404)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('404 Not Found', function () { pm.response.to.have.status(404); });"
+            ] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{viewerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        }
+      ]
+    }
+  ]
+}

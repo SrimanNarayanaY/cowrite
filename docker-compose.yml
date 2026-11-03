@@ -1,0 +1,46 @@
+name: cowrite
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cowrite-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cowrite}
+      POSTGRES_USER: ${POSTGRES_USER:-cowrite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cowrite}
+    ports:
+      # 5432/5433 are already used by local PostgreSQL installs on this machine
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cowrite} -d ${POSTGRES_DB:-cowrite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ./backend
+    container_name: cowrite-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-cowrite}
+      DB_USERNAME: ${POSTGRES_USER:-cowrite}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-cowrite}
+      # local Postgres has no TLS; hosted databases keep the default "require"
+      DB_SSLMODE: disable
+      # local-only fallback; override with a real secret in production
+      JWT_SECRET: ${JWT_SECRET:-local-docker-only-secret-change-me-1234567890}
+      JWT_EXPIRATION: 3600000
+      # let Flyway create the schema on a fresh database
+      SPRING_FLYWAY_ENABLED: "true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

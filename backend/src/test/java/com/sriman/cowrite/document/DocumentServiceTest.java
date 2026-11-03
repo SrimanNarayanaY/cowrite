@@ -3,6 +3,7 @@ package com.sriman.cowrite.document;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
 import com.sriman.cowrite.document.exception.DocumentNotFoundException;
+import com.sriman.cowrite.permission.DocumentPermissionRepository;
 import com.sriman.cowrite.user.User;
 import com.sriman.cowrite.user.UserRepository;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,9 @@ class DocumentServiceTest {
 
 	@Mock
 	private DocumentRepository documentRepository;
+
+	@Mock
+	private DocumentPermissionRepository documentPermissionRepository;
 
 	@Mock
 	private UserRepository userRepository;
@@ -85,11 +89,11 @@ class DocumentServiceTest {
 	}
 
 	@Test
-	void listMapsPageToResponseForOwner() {
-		given(documentRepository.findAllByOwnerId(eq(OWNER_ID), any(Pageable.class)))
+	void listAccessibleMapsPageToResponse() {
+		given(documentRepository.findAllAccessibleByUserId(eq(OWNER_ID), any(Pageable.class)))
 				.willReturn(new PageImpl<>(List.of(document("Title", "Body")), PageRequest.of(0, 10), 1));
 
-		var page = documentService.list(OWNER_ID, PageRequest.of(0, 10));
+		var page = documentService.listAccessible(OWNER_ID, PageRequest.of(0, 10));
 
 		assertThat(page.content()).hasSize(1);
 		assertThat(page.content().getFirst().title()).isEqualTo("Title");
@@ -101,29 +105,40 @@ class DocumentServiceTest {
 	@Test
 	void updateChangesExistingDocument() {
 		Document existing = document("Old", "Old body");
-		given(documentRepository.findByIdAndOwnerId(1L, OWNER_ID)).willReturn(Optional.of(existing));
+		given(documentRepository.findWithOwnerById(1L)).willReturn(Optional.of(existing));
 		given(documentRepository.save(existing)).willReturn(existing);
 
-		DocumentResponse response = documentService.update(1L, new DocumentRequest("New", "New body"), OWNER_ID);
+		DocumentResponse response = documentService.update(1L, new DocumentRequest("New", "New body"));
 
 		assertThat(response.title()).isEqualTo("New");
 		assertThat(response.content()).isEqualTo("New body");
 	}
 
 	@Test
-	void getByIdThrowsWhenMissingOrNotOwned() {
-		given(documentRepository.findByIdAndOwnerId(99L, OWNER_ID)).willReturn(Optional.empty());
+	void getByIdThrowsWhenMissing() {
+		given(documentRepository.findWithOwnerById(99L)).willReturn(Optional.empty());
 
-		assertThatThrownBy(() -> documentService.getById(99L, OWNER_ID))
+		assertThatThrownBy(() -> documentService.getById(99L))
 				.isInstanceOf(DocumentNotFoundException.class)
 				.hasMessage("Document not found with id: 99");
 	}
 
 	@Test
-	void deleteThrowsWhenMissingOrNotOwned() {
-		given(documentRepository.findByIdAndOwnerId(99L, OWNER_ID)).willReturn(Optional.empty());
+	void deleteRemovesSharesBeforeTheDocument() {
+		Document existing = document("Doc", "Body");
+		given(documentRepository.findWithOwnerById(1L)).willReturn(Optional.of(existing));
 
-		assertThatThrownBy(() -> documentService.delete(99L, OWNER_ID))
+		documentService.delete(1L);
+
+		then(documentPermissionRepository).should().deleteByDocumentId(1L);
+		then(documentRepository).should().delete(existing);
+	}
+
+	@Test
+	void deleteThrowsWhenMissing() {
+		given(documentRepository.findWithOwnerById(99L)).willReturn(Optional.empty());
+
+		assertThatThrownBy(() -> documentService.delete(99L))
 				.isInstanceOf(DocumentNotFoundException.class);
 		then(documentRepository).should(never()).delete(any());
 	}

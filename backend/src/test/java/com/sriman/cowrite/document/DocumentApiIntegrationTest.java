@@ -151,18 +151,19 @@ class DocumentApiIntegrationTest {
 				.andExpect(jsonPath("$.content[0].title").value("Alice private doc"))
 				.andExpect(jsonPath("$.content[0].ownerEmail").value("alice@example.com"));
 
-		// Someone else's document behaves like it does not exist -> 404, not 403
+		// No relation to the document: authenticated but forbidden -> 403
 		mockMvc.perform(get("/api/documents/" + bobDocId).header("Authorization", "Bearer " + aliceToken))
-				.andExpect(status().isNotFound());
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.status").value(403));
 
 		mockMvc.perform(put("/api/documents/" + bobDocId)
 						.header("Authorization", "Bearer " + aliceToken)
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"title\":\"hijacked\"}"))
-				.andExpect(status().isNotFound());
+				.andExpect(status().isForbidden());
 
 		mockMvc.perform(delete("/api/documents/" + bobDocId).header("Authorization", "Bearer " + aliceToken))
-				.andExpect(status().isNotFound());
+				.andExpect(status().isForbidden());
 
 		// Bob's document is untouched
 		mockMvc.perform(get("/api/documents/" + bobDocId).header("Authorization", "Bearer " + bobToken))

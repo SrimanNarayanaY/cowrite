@@ -84,7 +84,7 @@ class DocumentNPlusOneTest {
 	void entityGraphLoadsOwnersInOneQuery() {
 		Long ownerId = ownerIds.getFirst();
 
-		var page = documentService.list(ownerId,
+		var page = documentService.listAccessible(ownerId,
 				PageRequest.of(0, DOCUMENTS_PER_OWNER, Sort.by(Sort.Direction.DESC, "createdAt")));
 
 		long queries = statistics.getPrepareStatementCount();
@@ -100,13 +100,13 @@ class DocumentNPlusOneTest {
 	@Test
 	void getByIdAlsoLoadsOwnerInOneQuery() {
 		Long ownerId = ownerIds.getFirst();
-		Long id = documentRepository.findAllByOwnerId(ownerId, PageRequest.of(0, 1))
+		Long id = documentRepository.findAllAccessibleByUserId(ownerId, PageRequest.of(0, 1))
 				.getContent().getFirst().getId();
 
 		entityManager.clear();
 		statistics.clear();
 
-		DocumentResponse response = documentService.getById(id, ownerId);
+		DocumentResponse response = documentService.getById(id);
 
 		long queries = statistics.getPrepareStatementCount();
 		System.out.printf("[N+1 FIXED] getById -> %d query%n", queries);

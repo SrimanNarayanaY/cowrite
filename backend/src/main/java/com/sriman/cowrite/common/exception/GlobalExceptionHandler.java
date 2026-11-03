@@ -3,6 +3,9 @@ package com.sriman.cowrite.common.exception;
 import com.sriman.cowrite.auth.exception.EmailAlreadyRegisteredException;
 import com.sriman.cowrite.auth.exception.InvalidCredentialsException;
 import com.sriman.cowrite.document.exception.DocumentNotFoundException;
+import com.sriman.cowrite.permission.exception.CannotShareWithSelfException;
+import com.sriman.cowrite.permission.exception.PermissionDeniedException;
+import com.sriman.cowrite.user.exception.UserNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -18,23 +21,32 @@ public class GlobalExceptionHandler {
 
 	@ExceptionHandler(DocumentNotFoundException.class)
 	public ResponseEntity<ApiError> handleNotFound(DocumentNotFoundException ex) {
-		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
-				ApiError.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage())
-		);
+		return error(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage());
+	}
+
+	@ExceptionHandler(UserNotFoundException.class)
+	public ResponseEntity<ApiError> handleUserNotFound(UserNotFoundException ex) {
+		return error(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage());
+	}
+
+	@ExceptionHandler(PermissionDeniedException.class)
+	public ResponseEntity<ApiError> handlePermissionDenied(PermissionDeniedException ex) {
+		return error(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage());
+	}
+
+	@ExceptionHandler(CannotShareWithSelfException.class)
+	public ResponseEntity<ApiError> handleSelfShare(CannotShareWithSelfException ex) {
+		return error(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage());
 	}
 
 	@ExceptionHandler(EmailAlreadyRegisteredException.class)
 	public ResponseEntity<ApiError> handleConflict(EmailAlreadyRegisteredException ex) {
-		return ResponseEntity.status(HttpStatus.CONFLICT).body(
-				ApiError.of(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage())
-		);
+		return error(HttpStatus.CONFLICT, "Conflict", ex.getMessage());
 	}
 
 	@ExceptionHandler(InvalidCredentialsException.class)
 	public ResponseEntity<ApiError> handleInvalidCredentials(InvalidCredentialsException ex) {
-		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
-				ApiError.of(HttpStatus.UNAUTHORIZED.value(), "Unauthorized", ex.getMessage())
-		);
+		return error(HttpStatus.UNAUTHORIZED, "Unauthorized", ex.getMessage());
 	}
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
@@ -50,9 +62,12 @@ public class GlobalExceptionHandler {
 
 	@ExceptionHandler(HttpMessageNotReadableException.class)
 	public ResponseEntity<ApiError> handleUnreadableBody(HttpMessageNotReadableException ex) {
-		return ResponseEntity.badRequest().body(
-				ApiError.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Malformed request body")
-		);
+		return error(HttpStatus.BAD_REQUEST, "Bad Request", "Malformed request body");
+	}
+
+	private ResponseEntity<ApiError> error(HttpStatus status, String error, String message) {
+		return ResponseEntity.status(status)
+				.body(ApiError.of(status.value(), error, message));
 	}
 
 }
