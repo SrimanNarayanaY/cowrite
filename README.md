@@ -6,7 +6,7 @@
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-blue)
 ![Docker](https://img.shields.io/badge/docker%20compose-ready-blue)
-![Tests](https://img.shields.io/badge/tests-43%20passing-success)
+![Tests](https://img.shields.io/badge/tests-47%20passing-success)
 
 ---
 
@@ -26,6 +26,7 @@
 - [Testing](#testing)
 - [Getting started](#getting-started)
 - [Running with Docker](#running-with-docker)
+- [Frontend (React)](#frontend-react)
 - [Configuration](#configuration)
 - [Design decisions](#design-decisions)
 - [Roadmap](#roadmap)
@@ -55,6 +56,7 @@ The codebase is organised **by feature** (not by layer), so a feature is one fol
 - N+1 eliminated with `@EntityGraph` (join fetch) on list and detail queries
 - Flyway schema migrations, H2-backed integration tests, DevTools hot restart
 - Multi-stage `Dockerfile` (non-root runtime) + `docker-compose.yml` (API + PostgreSQL)
+- React 19 + TypeScript web client in [`frontend/`](frontend): login/register, protected routes, paginated document list with create/delete
 
 ---
 
@@ -75,6 +77,10 @@ The codebase is organised **by feature** (not by layer), so a feature is one fol
 | **Spring Boot DevTools** | (runtime, optional) | Restart on recompile — the Spring equivalent of `nodemon` |
 | **Docker / Compose** | (local) | Reproducible run: API image + PostgreSQL with health-gated startup |
 | **Spring Boot Test / MockMvc** | (test scope) | Full-stack HTTP tests without starting a real server |
+| **React** | 19 | Component model + hooks for the web client in `frontend/` |
+| **TypeScript** | 5.x | Request/response types mirror the backend DTO records |
+| **Vite** | 8.x | Instant dev server (`localhost:5173`) and production build |
+| **React Router / Axios** | 7.x / 1.x | Protected routes; one axios instance with auth interceptors |
 
 **Deliberately not used:** `ddl-auto=update` (unreviewable schema drift), raw `System.out` logging (SLF4J via Boot), a separate `controller/ service/ repository/` layering (feature packages scale better), password hashing in application code (delegated to `PasswordEncoder`).
 
@@ -120,6 +126,8 @@ com.sriman.cowrite
 ```
 
 **Package-by-feature** keeps each business capability in one place. NestJS developers will recognise the shape: a feature package is a module, `*Controller` is the controller, `*Service` is the provider, and `*Repository` is the data-access layer.
+
+The React client in [`frontend/`](frontend) follows the same idea instead of a flat `components/` dump: `api/` (axios instance + DTO types), `auth/` (token storage, context, hook), `components/` (shared UI), `pages/` (one file per route).
 
 ---
 
@@ -465,7 +473,7 @@ cd backend
 ```
 
 ```
-Tests run: 43, Failures: 0, Errors: 0 — BUILD SUCCESS
+Tests run: 47, Failures: 0, Errors: 0 — BUILD SUCCESS
 ```
 
 | Suite | Tests | What it proves |
@@ -475,12 +483,15 @@ Tests run: 43, Failures: 0, Errors: 0 — BUILD SUCCESS
 | `DocumentSharingIntegrationTest` | 5 | Owner shares; viewer reads but cannot update/delete/re-share (`403`); editor updates but cannot delete/share; role upgrade takes effect; self-share `400`; unknown email `404`; deleting a document removes its shares |
 | `PermissionServiceTest` | 11 | `isOwner` / `canView` / `canEdit` for owner, editor, viewer, stranger; `require*` throws `PermissionDeniedException` (`403`) or `DocumentNotFoundException` (`404`) correctly (Mockito) |
 | `DocumentServiceTest` | 6 | Owner taken from the principal, accessible-page mapping, exception paths, shares removed before delete (Mockito) |
+| `CorsIntegrationTest` | 4 | Preflight from `http://localhost:5173` succeeds without a token (not `401`), allows `POST`/`Authorization`, real requests carry `Access-Control-Allow-Origin`, unknown origins get `403` |
 | `DocumentNPlusOneTest` | 3 | Query counts before/after `@EntityGraph` |
 | `CowriteApiApplicationTests` | 1 | Application context loads |
 
 Tests run against **H2 in PostgreSQL mode** (`src/test/resources/application-test.properties`), so no database or network is required. DevTools is automatically disabled in tests.
 
 The Docker path was also verified end-to-end: `docker compose up` applies V1–V4 on a fresh PostgreSQL, then a scripted run exercised register → login → create → share (`VIEWER`/`EDITOR`) → viewer `PUT` `403` → editor `PUT` `200` → editor `DELETE` `403` → owner `DELETE` `204`.
+
+The browser flow is covered separately by `frontend/scripts/smoke.mjs` (Playwright, real Chrome): register → reload keeps the session → create → another user's list does not contain the document → delete → logout → protected route redirect.
 
 ---
 
@@ -489,6 +500,7 @@ The Docker path was also verified end-to-end: `docker compose up` applies V1–V
 ### Prerequisites
 
 - JDK 21
+- Node.js 20+ (web client only)
 - PostgreSQL 16 (local, Docker, or hosted — Neon/Aiven/Supabase all work)
 - No Maven install needed: the Maven wrapper is committed
 
@@ -669,6 +681,57 @@ For production, replace the Compose-only `JWT_SECRET` fallback with a real secre
 
 ---
 
+## Frontend (React)
+
+The web client lives in [`frontend/`](frontend) — Vite + React 19 + TypeScript — and calls this API over CORS.
+
+### Run it
+
+```bash
+# terminal 1 — API
+docker compose up -d              # or: cd backend && ./mvnw spring-boot:run
+
+# terminal 2 — web client
+cd frontend
+npm install
+npm run dev                       # http://localhost:5173
+```
+
+### What it covers
+
+| Route | Purpose |
+|---|---|
+| `/login` | `POST /api/auth/login`, stores the JWT |
+| `/register` | `POST /api/auth/register`, then logs in automatically |
+| `/docs` | paginated list (own + shared), create modal, delete (owner only) |
+| `/todo` | Step 2 playground: `useState` / `useEffect` **with cleanup** |
+
+- `ProtectedRoute` redirects to `/login` when no token is stored; `/login` and `/register` redirect away when a session exists.
+- One axios instance: the request interceptor adds `Authorization: Bearer …`, the response interceptor clears the token and redirects on `401`.
+- The token lives in `localStorage` — fine for a portfolio project, but XSS-readable. The production alternative (in-memory access token + `HttpOnly` refresh cookie) is documented in [`frontend/README.md`](frontend/README.md).
+- The token payload is decoded only to show the signed-in email; the server still verifies the signature.
+
+### Verified in a real browser
+
+```bash
+cd frontend
+npm run smoke        # Playwright + the installed Chrome
+```
+
+10 checks: register → session survives a reload → create → **a second user cannot see the document** → delete → logout → `/docs` redirects to `/login`. The backend suite (47 tests) and this browser smoke test are both green.
+
+### CORS
+
+A browser sends a preflight `OPTIONS` request that Postman never sends. It is allowed by:
+
+```properties
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+```
+
+plus `.cors(Customizer.withDefaults())` on the security chain. Without that, the preflight would be answered with `401` and the browser would report a CORS error even though every curl/Postman call works. `CorsIntegrationTest` pins this behaviour.
+
+---
+
 ## Configuration
 
 `backend/src/main/resources/application.properties`
@@ -681,6 +744,7 @@ For production, replace the Compose-only `JWT_SECRET` fallback with a real secre
 | `spring.flyway.enabled` | `false` | set `true` to let Flyway manage the schema (Docker Compose does) |
 | `jwt.secret` | `${JWT_SECRET}` | required, ≥ 32 bytes |
 | `jwt.expiration` | `${JWT_EXPIRATION:3600000}` | milliseconds |
+| `app.cors.allowed-origins` | `${CORS_ALLOWED_ORIGINS:http://localhost:5173,...}` | comma-separated browser origins; never `*` |
 
 `backend/src/test/resources/application-test.properties` overrides the datasource with H2, sets `ddl-auto=create-drop`, disables Flyway and uses a fixed test-only JWT secret.
 
@@ -713,6 +777,9 @@ For production, replace the Compose-only `JWT_SECRET` fallback with a real secre
 
 - [x] Document sharing and role-based access (`viewer` / `editor` / `owner`)
 - [x] Docker Compose for local Postgres + API
+- [x] React web client: auth, protected routes, paginated list, create/delete (Milestone 1)
+- [ ] Frontend: document editing and sharing UI (API already supports both)
+- [ ] Frontend: refresh-token flow instead of a long-lived `localStorage` token
 - [ ] Return the caller's effective role in `DocumentResponse` (needs a projection to stay N+1-free)
 - [ ] Refresh tokens + logout (token revocation / denylist)
 - [ ] Real-time collaboration over WebSocket (CRDT-based editing) — reuses `PermissionService`
