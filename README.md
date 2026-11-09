@@ -27,6 +27,7 @@
 - [Getting started](#getting-started)
 - [Running with Docker](#running-with-docker)
 - [Frontend (React)](#frontend-react)
+  - [How the UI works, end to end](#how-the-ui-works-end-to-end)
 - [Configuration](#configuration)
 - [Design decisions](#design-decisions)
 - [Roadmap](#roadmap)
@@ -710,6 +711,262 @@ npm run dev                       # http://localhost:5173
 - One axios instance: the request interceptor adds `Authorization: Bearer …`, the response interceptor clears the token and redirects on `401`.
 - The token lives in `localStorage` — fine for a portfolio project, but XSS-readable. The production alternative (in-memory access token + `HttpOnly` refresh cookie) is documented in [`frontend/README.md`](frontend/README.md).
 - The token payload is decoded only to show the signed-in email; the server still verifies the signature.
+
+### How the UI works, end to end
+
+This section follows one user journey — open the app, sign in, see the list, create a document — and names the file that implements each step. Read it top to bottom and the frontend stops feeling like magic. No prior React knowledge is assumed; the few concepts that matter are explained where they appear.
+
+#### The mental model: two kinds of state
+
+Almost every confusing React bug comes from mixing these up:
+
+| Kind of state | Where it lives | Examples |
+|---|---|---|
+| **Session state** | `AuthProvider`, readable anywhere with `useAuth()` | are we signed in, which email is signed in |
+| **Screen state** | one page component, via `useState` | current page number, rows on screen, is the create dialog open |
+
+Documents themselves are **not** frontend state. The API is the source of truth. After a write the page does not patch its own copy of the list — it asks the server for the list again. That costs one extra request and removes an entire class of bugs where the UI and the database quietly disagree.
+
+#### Layer map
+
+```
+main.tsx                  mounts <App /> into #root
+└── App.tsx               the route table, nothing else
+    └── AuthProvider      session state: token, email, login / register / logout
+        └── BrowserRouter History API — no full page reloads
+            └── Routes
+                ├── /login, /register   → PublicOnlyRoute
+                ├── /docs, /todo        → ProtectedRoute → Layout → <Outlet />
+                └── /                   → <Navigate to="/docs" />
+```
+
+Every path below is relative to [`frontend/src`](frontend/src).
+
+#### Step 1 — Startup: restore the session before the first paint
+
+`AuthProvider` initialises state with a **lazy initialiser**:
+
+```tsx
+const [session, setSession] = useState<Session | null>(() => readSession())
+```
+
+`readSession()` in `auth/token.ts` runs exactly once, on the first render. It reads `cowrite.token` from `localStorage`, decodes the JWT payload, and compares `exp` with the current time:
+
+| Stored value | Result |
+|---|---|
+| nothing | `null` — signed out |
+| malformed or expired token | token is deleted, `null` — signed out |
+| valid token | `{ token, email }` — signed in |
+
+Doing this **before** the first render is what makes a refresh feel invisible: a signed-in user reloads `/docs` and stays on `/docs`, while an expired token redirects to `/login` instead of flashing a dashboard that would immediately answer `401`.
+
+The payload is decoded for **display only** — the header shows the email. The backend still verifies the signature on every request: a client can read a JWT, but it cannot forge one.
+
+#### Step 2 — Route guards decide what may render
+
+`components/ProtectedRoute.tsx` exports two guards:
+
+| Guard | Protects | Session present | Session absent |
+|---|---|---|---|
+| `ProtectedRoute` | `/docs`, `/todo` (the whole `Layout`) | renders `children` | `<Navigate to="/login" replace state={{ from }} />` |
+| `PublicOnlyRoute` | `/login`, `/register` | `<Navigate to="/docs" replace />` | renders `children` |
+
+The `from` value is why the round trip is pleasant. A signed-out user who opens `/docs` is sent to `/login` **with the original path remembered**; after a successful login they land on `/docs`, not on a generic home page.
+
+> `ProtectedRoute` is a **UX guard, not a security boundary**. Anyone can flip React state in devtools. The real gate is the backend: `401` without a valid JWT, `403` without permission. Hiding a button is presentation, never authorization.
+
+#### Step 3 — Signing in
+
+`pages/LoginPage.tsx` owns the form state (`email`, `password`, `error`, `submitting`) and calls `login()` from the auth context:
+
+```
+LoginPage.handleSubmit
+  → AuthProvider.login              (auth/AuthProvider.tsx)
+      → POST /api/auth/login        { "email": "…", "password": "…" }
+      ← 200 OK                      { "token": "<jwt>" }
+      → setToken(token)             localStorage["cowrite.token"]
+      → setSession({ token, email })
+  → navigate(from ?? '/docs', { replace: true })
+```
+
+Three details worth knowing:
+
+1. **`setSession` is the moment the app becomes authenticated.** `isAuthenticated` flips to `true`, every consumer re-renders, and `PublicOnlyRoute` would leave `/login` even if `navigate()` were never called.
+2. **`replace: true`** replaces the `/login` entry in browser history, so the Back button does not return to the form after signing in.
+3. **A failed login must not trigger the global `401` handler.** The response interceptor in `api/client.ts` redirects only when a token **already existed**, so a typo produces an inline "Invalid credentials" message instead of a page reload.
+
+`/register` is the same flow with one extra step: `POST /api/auth/register` returns `201 Created` without a token, so `AuthProvider.register` calls `login()` immediately afterwards.
+
+#### Step 4 — The authenticated shell
+
+After `navigate('/docs')`, React Router renders the parent route declared in `App.tsx`:
+
+```tsx
+<Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+  <Route path="/docs" element={<DocumentsPage />} />
+  <Route path="/todo" element={<TodoPage />} />
+</Route>
+```
+
+`Layout` draws the top bar (brand, navigation, signed-in email, log out) and then `<Outlet />` — the placeholder where the matched child page is injected. This is why the top bar does not disappear or re-mount when moving from `/docs` to `/todo`: only the outlet's content changes.
+
+Navigation uses `<NavLink>` rather than `<a href>`, so the History API updates the URL and React swaps the page **without a full browser reload**. The `isActive` callback adds the `active` class to the current link.
+
+#### Step 5 — Loading the document list
+
+`DocumentsPage` fetches on mount and whenever the page number or an explicit reload changes:
+
+```tsx
+useEffect(() => {
+  const controller = new AbortController()
+  let active = true
+
+  api.get('/documents', { params: { page, size: 5 }, signal: controller.signal })
+    .then((response) => { if (active) setData(response.data) })
+    .catch((err) => {
+      if (!active || axios.isCancel(err)) return
+      setError(errorMessage(err))
+    })
+    .finally(() => { if (active) setLoading(false) })
+
+  return () => { active = false; controller.abort() }
+}, [page, reloadKey])
+```
+
+What the dependencies mean: `page` changes when the user paginates, and `reloadKey` is a counter that `reload()` increments. There is no `setState` synchronously in the effect body — `loading` and `error` are set by the handler that **starts** the action (paginate, retry, delete, create), while the effect only performs I/O. That is what keeps the request loop terminating instead of re-triggering itself.
+
+The component never mentions a token. `api/client.ts` attaches it in a request interceptor:
+
+```
+request interceptor → Authorization: Bearer <token from localStorage>
+```
+
+So no page can forget the header, and exactly one file knows how authentication travels over HTTP.
+
+The response is the envelope documented in [Pagination](#pagination):
+
+```json
+{
+  "content": [
+    {
+      "id": 12,
+      "title": "Design notes",
+      "content": "…",
+      "ownerId": 1,
+      "ownerEmail": "alice@example.com",
+      "createdAt": "2026-01-14T09:12:00Z",
+      "updatedAt": "2026-01-14T09:30:00Z"
+    }
+  ],
+  "page": 0,
+  "size": 5,
+  "totalElements": 12,
+  "totalPages": 3,
+  "first": true,
+  "last": false
+}
+```
+
+`AbortController` plus the `active` flag solve the "slow response overwrites a newer one" problem: clicking *Next* twice quickly aborts the first request, and a late callback from an unmounted component is ignored.
+
+#### Step 6 — How a row decides what to show
+
+Each item in `content` becomes a card. The only branch that matters is ownership:
+
+```tsx
+const mine = document.ownerEmail !== null && document.ownerEmail === email
+```
+
+| Condition | Badge | Delete button |
+|---|---|---|
+| `mine === true` | `Yours` | visible |
+| shared with me | `Shared by alice@example.com` | hidden |
+
+A document with no content shows "No content yet." instead of the preview; the badge and delete rules above are unchanged.
+
+Hiding the delete button is presentation. A shared user who calls `DELETE /api/documents/{id}` directly still receives `403` from the backend.
+
+Empty and error states are explicit rather than accidental: "No documents yet" with a create button when the list is empty and the request succeeded; a retry bar when the request failed; and "Loading documents…" only while the **first** page is in flight, so pagination does not flicker the whole list.
+
+#### Step 7 — Creating a document
+
+The same dialog is opened from two places in `DocumentsPage`:
+
+- the **New document** button in the page header;
+- the **Create a document** button inside the empty state — a brand-new account would otherwise stare at a blank page.
+
+Both call `setCreateOpen(true)`. At the bottom of the component:
+
+```tsx
+{createOpen && <CreateDocumentDialog onClose={() => setCreateOpen(false)} onCreated={…} />}
+```
+
+The dialog (`components/CreateDocumentDialog.tsx`) owns its own `title` / `content` / `saving` / `error` state and submits:
+
+```
+POST /api/documents
+{ "title": "Design notes", "content": "…" }     // content is null when left empty
+```
+
+The body contains only `title` and `content`. **The owner is neither sent nor selectable** — the backend reads the authenticated principal from the JWT and sets `owner_id` itself. This is the frontend half of the ownership rule the backend enforces.
+
+On success the dialog calls `onCreated()` and closes. `onCreated` does not splice the new document into the array by hand; it triggers a refetch:
+
+```tsx
+onCreated={() => {
+  if (page === 0) reload()      // reloadKey++  → the effect runs again
+  else goToPage(0)              // jump to page 0 → the effect runs again
+}}
+```
+
+Jumping to page 0 is deliberate: the list is sorted newest-first, so a new document is guaranteed to be visible there. Refetching instead of patching local state means the row on screen is exactly what the server stored, including server-generated fields such as `id`, `createdAt` and `updatedAt`.
+
+The dialog also demonstrates a `useEffect` **with cleanup**: an Escape-key listener is added on mount and removed on unmount, so opening and closing the modal repeatedly does not leak listeners.
+
+#### Step 8 — Pagination and deletion
+
+Pagination is server-side. `goToPage(next)` sets `loading`, clears the previous error, and updates `page`; the effect then requests exactly that page. The buttons are disabled from the envelope itself — `data.first` disables *Previous*, `data.last` disables *Next* — so the UI never guesses the bounds.
+
+Deletion follows the same "change, then refetch" rule, with one edge case:
+
+```tsx
+if (data && data.content.length === 1 && !data.first) {
+  goToPage(Math.max(0, data.page - 1))   // last row on a page → step back
+} else {
+  reload()
+}
+```
+
+Without that branch, deleting the only row of page 3 would leave the user on an empty page after `totalPages` had already shrunk to 2.
+
+#### Step 9 — Logging out, and the global `401` path
+
+The top bar's **Log out** calls `logout()` (`clearToken()` + `setSession(null)`) and navigates to `/login`. Even if the navigation were skipped, `ProtectedRoute` would redirect on the next render because the session is gone.
+
+There is a second, non-interactive exit. If any request returns `401` **while a token was stored**, the response interceptor deletes the token and redirects to `/login`. That is what expiry looks like in practice: the user clicked a link, the server rejected the stale token, and the app returned to the sign-in screen instead of leaving an error box on a page that can never load.
+
+#### The whole journey on one page
+
+```
+Browser loads /
+  → readSession()                       valid token? ── no ──→ /login
+  → /                                   (redirect)
+  → /docs   ProtectedRoute ── yes ──→   Layout + DocumentsPage
+                                          → GET /api/documents?page=0&size=5
+                                            (Authorization: Bearer …)
+                                          ← 200 PageResponse
+                                          → cards + pagination
+  → "New document" → dialog → POST /api/documents → reload → GET again
+  → Log out (or a 401) → token cleared → /login
+```
+
+#### Design rules this section is meant to leave you with
+
+1. **The server owns the data.** A write ends with a refetch, never with a hand-edited local copy.
+2. **One HTTP client.** Auth headers and `401` handling live in `api/client.ts`, not in pages.
+3. **Session state is global, screen state is local.** Only what the whole app needs (who is signed in) goes into context.
+4. **The guard is UX; the API is security.** Hiding a button is not authorization.
+5. **Effects start I/O; handlers set flags.** That is what keeps `useEffect` from looping.
 
 ### Verified in a real browser
 

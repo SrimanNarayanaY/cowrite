@@ -106,6 +106,11 @@ project the simpler choice is documented, not hidden.
 The JWT payload is decoded only to show the signed-in email. That is **not**
 verification — the server verifies the signature on every request.
 
+For the full journey — startup, guards, the list request, the create dialog, pagination
+and logout, with the file that implements each step — see
+[**How the UI works, end to end**](../README.md#how-the-ui-works-end-to-end) in the root
+README.
+
 ## Step 2 — React playground (`/todo`)
 
 The `/todo` page is the deliberate warm-up before touching the API:
