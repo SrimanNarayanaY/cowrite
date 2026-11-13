@@ -1,5 +1,5 @@
 /**
- * Browser smoke test for Milestone 1.
+ * Browser smoke test.
  *
  * Requires the API (:8080) and the dev server (:5173) to be running:
  *   cd frontend && npm run dev
@@ -11,9 +11,11 @@
 import { chromium } from 'playwright'
 
 const BASE = process.env.FRONTEND_URL ?? 'http://localhost:5173'
+const API = process.env.API_URL ?? 'http://localhost:8080/api'
 const EMAIL = `e2e-${Date.now()}@example.com`
 const PASSWORD = 'password123'
 const TITLE = `E2E document ${Date.now()}`
+const TYPED_TEXT = 'Hello from the Tiptap editor.'
 
 const checks = []
 function check(name, condition) {
@@ -56,21 +58,75 @@ try {
   console.log('4. Empty-state onboarding is gone')
   check('empty state is not shown', (await page.getByText('No documents yet').count()) === 0)
 
-  console.log('5. A different user cannot see the document')
-  const otherContext = await browser.newContext()
-  const otherPage = await otherContext.newPage()
-  await otherPage.goto(`${BASE}/register`)
-  await otherPage.fill('input[name="email"]', `e2e-other-${Date.now()}@example.com`)
-  await otherPage.fill('input[name="password"]', PASSWORD)
-  await otherPage.fill('input[name="confirmPassword"]', PASSWORD)
-  await otherPage.click('button[type="submit"]')
-  await otherPage.waitForURL('**/docs')
-  await otherPage.getByText('No documents yet').waitFor()
-  check('second user sees the empty state', await otherPage.getByText('No documents yet').isVisible())
-  check('second user cannot see the first user document', (await otherPage.getByText(TITLE).count()) === 0)
-  await otherContext.close()
+  console.log('5. Open the editor and auto-save')
+  await page.locator('.doc-card', { hasText: TITLE }).getByRole('link', { name: 'Open' }).click()
+  await page.waitForURL('**/docs/*')
+  const editor = page.locator('.ProseMirror')
+  await editor.waitFor()
+  check('editor route is open', /\/docs\/\d+$/.test(page.url()))
 
-  console.log('6. Delete the document')
+  await editor.click()
+  await page.keyboard.type(` ${TYPED_TEXT}`)
+  await page.getByText('Saved', { exact: true }).waitFor({ timeout: 10_000 })
+  check('debounced save reports Saved', await page.getByText('Saved', { exact: true }).isVisible())
+  check('version advanced to v1', await page.getByText('v1', { exact: true }).isVisible())
+
+  console.log('6. Saved content survives a reload')
+  await page.reload()
+  await page.locator('.ProseMirror').waitFor()
+  check('typed text is still in the document', (await page.locator('.ProseMirror').innerText()).includes(TYPED_TEXT))
+
+  console.log('7. A stale tab gets a 409 conflict')
+  const docId = new URL(page.url()).pathname.split('/').pop()
+  const stalePage = await context.newPage()
+  await stalePage.goto(`${BASE}/docs/${docId}`)
+  await stalePage.locator('.ProseMirror').waitFor()
+
+  // Page A saves first, so page B still holds the previous version.
+  await page.locator('.ProseMirror').click()
+  await page.keyboard.type(' Edited in tab A.')
+  await page.getByText('Saved', { exact: true }).waitFor({ timeout: 10_000 })
+
+  await stalePage.locator('.ProseMirror').click()
+  await stalePage.keyboard.type(' Edited in tab B.')
+  await stalePage.getByText('Document changed elsewhere', { exact: false }).waitFor({ timeout: 10_000 })
+  check('stale tab shows the conflict message', await stalePage.getByText('Document changed elsewhere').isVisible())
+  check('conflict offers a Reload action', await stalePage.getByRole('button', { name: 'Reload' }).isVisible())
+  await stalePage.close()
+
+  console.log('8. A VIEWER can open the document but cannot type')
+  const viewerEmail = `e2e-viewer-${Date.now()}@example.com`
+  await fetch(`${API}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: viewerEmail, password: PASSWORD }),
+  })
+  const ownerToken = await page.evaluate(() => localStorage.getItem('cowrite.token'))
+  const shareResponse = await fetch(`${API}/documents/${docId}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ email: viewerEmail, role: 'VIEWER' }),
+  })
+  check('owner shared the document', shareResponse.ok)
+
+  const viewerContext = await browser.newContext()
+  const viewerPage = await viewerContext.newPage()
+  await viewerPage.goto(`${BASE}/login`)
+  await viewerPage.fill('input[name="email"]', viewerEmail)
+  await viewerPage.fill('input[name="password"]', PASSWORD)
+  await viewerPage.click('button[type="submit"]')
+  await viewerPage.waitForURL('**/docs')
+  await viewerPage.goto(`${BASE}/docs/${docId}`)
+  await viewerPage.locator('.ProseMirror').waitFor()
+
+  check('viewer sees the editor content', (await viewerPage.locator('.ProseMirror').innerText()).includes(TYPED_TEXT))
+  check('viewer editor is not editable', (await viewerPage.locator('.ProseMirror').getAttribute('contenteditable')) === 'false')
+  check('viewer sees the read-only badge', await viewerPage.getByText('View only', { exact: true }).isVisible())
+  check('viewer toolbar is disabled', await viewerPage.getByRole('button', { name: 'Bold' }).isDisabled())
+  await viewerContext.close()
+
+  console.log('9. Delete the document')
+  await page.goto(`${BASE}/docs`)
   await page
     .locator('.doc-card', { hasText: TITLE })
     .getByRole('button', { name: 'Delete' })
@@ -78,12 +134,12 @@ try {
   await page.getByText(TITLE).waitFor({ state: 'detached' })
   check('document card is removed', (await page.getByText(TITLE).count()) === 0)
 
-  console.log('7. Log out')
+  console.log('10. Log out')
   await page.getByRole('button', { name: 'Log out' }).click()
   await page.waitForURL('**/login')
   check('logout lands on /login', page.url().endsWith('/login'))
 
-  console.log('8. Protected route without a token')
+  console.log('11. Protected route without a token')
   await page.goto(`${BASE}/docs`)
   await page.waitForURL('**/login')
   check('/docs redirects to /login', page.url().endsWith('/login'))

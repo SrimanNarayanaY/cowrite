@@ -10,7 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Single source of truth for "who may do what with a document".
- *
+ *n
  * <p>Every entry point (REST controller today, WebSocket handler later) must call
  * {@code requireView/requireEdit/requireOwner}. Never copy permission {@code if}s into a
  * controller: the copy you forget to update becomes a security hole.</p>
@@ -40,6 +40,28 @@ public class PermissionService {
 			return true;
 		}
 		return roleOf(documentId, userId) == DocumentRole.EDITOR;
+	}
+
+	/**
+	 * The caller's relationship to the document, with read access enforced:
+	 * missing document -> 404, existing but unrelated document -> 403.
+	 *
+	 * <p>Used by the detail endpoint so the editor can render read-only for VIEWER
+	 * without duplicating permission rules in the client.</p>
+	 */
+	public DocumentAccess accessLevel(Long documentId, Long userId) {
+		Document document = loadDocument(documentId);
+
+		if (isOwner(document, userId)) {
+			return DocumentAccess.OWNER;
+		}
+
+		DocumentRole role = roleOf(documentId, userId);
+		if (role == null) {
+			throw new PermissionDeniedException("view", documentId);
+		}
+
+		return role == DocumentRole.EDITOR ? DocumentAccess.EDITOR : DocumentAccess.VIEWER;
 	}
 
 	/**

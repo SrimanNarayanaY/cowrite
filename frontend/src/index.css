@@ -443,6 +443,16 @@ textarea {
   word-break: break-word;
 }
 
+.doc-card-head h2 a {
+  color: inherit;
+}
+
+.doc-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .doc-content summary {
   cursor: pointer;
   font-size: 0.85rem;
@@ -562,6 +572,104 @@ textarea {
   font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
   font-size: 0.8rem;
   line-height: 1.6;
+}
+
+/* ---------- editor ---------- */
+
+.editor-shell {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.btn-toolbar {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+}
+
+.btn-active {
+  background: var(--brand-soft);
+  border-color: #c7d2fe;
+  color: var(--brand-strong);
+}
+
+.toolbar-spacer {
+  margin-left: auto;
+}
+
+.editor-banner {
+  margin: 0.75rem;
+}
+
+.editor-body {
+  padding: 1.25rem 1.5rem 2rem;
+  min-height: 420px;
+}
+
+.editor-body .ProseMirror {
+  min-height: 380px;
+  outline: none;
+  line-height: 1.65;
+}
+
+.editor-body .ProseMirror > * + * {
+  margin-top: 0.75rem;
+}
+
+.editor-body .ProseMirror h1 {
+  font-size: 1.7rem;
+}
+
+.editor-body .ProseMirror h2 {
+  font-size: 1.3rem;
+}
+
+.editor-body .ProseMirror p {
+  margin: 0;
+}
+
+.editor-body .ProseMirror ul,
+.editor-body .ProseMirror ol {
+  padding-left: 1.4rem;
+}
+
+.editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.editor-status {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.editor-status.saving {
+  color: var(--brand-strong);
+}
+
+.editor-status.saved {
+  color: #15803d;
+}
+
+.editor-status.error {
+  color: var(--danger);
 }
 
 @media (max-width: 640px) {

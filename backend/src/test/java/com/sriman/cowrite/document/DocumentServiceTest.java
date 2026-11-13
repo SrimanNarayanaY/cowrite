@@ -106,7 +106,7 @@ class DocumentServiceTest {
 	void updateChangesExistingDocument() {
 		Document existing = document("Old", "Old body");
 		given(documentRepository.findWithOwnerById(1L)).willReturn(Optional.of(existing));
-		given(documentRepository.save(existing)).willReturn(existing);
+		given(documentRepository.saveAndFlush(existing)).willReturn(existing);
 
 		DocumentResponse response = documentService.update(1L, new DocumentRequest("New", "New body"));
 

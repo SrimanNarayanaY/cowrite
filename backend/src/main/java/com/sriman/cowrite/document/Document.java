@@ -12,6 +12,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -34,6 +35,18 @@ public class Document {
 
 	@Column(columnDefinition = "text")
 	private String content;
+
+	/**
+	 * Optimistic locking. Hibernate includes {@code version} in the UPDATE's WHERE
+	 * clause and increments it, so two concurrent writers cannot both succeed:
+	 * the loser updates 0 rows and gets an OptimisticLockingFailureException (409).
+	 *
+	 * <p>The client also sends the version it last saw so the conflict is detected
+	 * before writing, not after.</p>
+	 */
+	@Version
+	@Column(nullable = false)
+	private Long version;
 
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "owner_id")

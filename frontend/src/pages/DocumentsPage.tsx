@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
+import { Link } from 'react-router-dom'
 import { api, errorMessage } from '../api/client'
 import type { DocumentSummary, PageResponse } from '../api/types'
 import { useAuth } from '../auth/useAuth'
 import { CreateDocumentDialog } from '../components/CreateDocumentDialog'
+import { plainText } from '../lib/content'
 
 const PAGE_SIZE = 5
 
@@ -136,20 +138,23 @@ export function DocumentsPage() {
         <ul className="doc-grid">
           {documents.map((document) => {
             const mine = document.ownerEmail !== null && document.ownerEmail === email
+            const preview = plainText(document.content)
 
             return (
               <li key={document.id} className={loading ? 'doc-card busy' : 'doc-card'}>
                 <div className="doc-card-head">
-                  <h2>{document.title}</h2>
+                  <h2>
+                    <Link to={`/docs/${document.id}`}>{document.title}</Link>
+                  </h2>
                   <span className={mine ? 'badge badge-own' : 'badge'}>
                     {mine ? 'Yours' : `Shared by ${document.ownerEmail ?? 'someone'}`}
                   </span>
                 </div>
 
-                {document.content ? (
+                {preview ? (
                   <details className="doc-content">
                     <summary>Preview content</summary>
-                    <p>{document.content}</p>
+                    <p>{preview}</p>
                   </details>
                 ) : (
                   <p className="muted small">No content yet.</p>
@@ -157,16 +162,21 @@ export function DocumentsPage() {
 
                 <footer className="doc-card-foot">
                   <span className="muted small">Updated {formatDate(document.updatedAt)}</span>
-                  {mine && (
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-small"
-                      onClick={() => handleDelete(document)}
-                      disabled={deletingId === document.id}
-                    >
-                      {deletingId === document.id ? 'Deleting…' : 'Delete'}
-                    </button>
-                  )}
+                  <div className="doc-card-actions">
+                    <Link className="btn btn-ghost btn-small" to={`/docs/${document.id}`}>
+                      Open
+                    </Link>
+                    {mine && (
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-small"
+                        onClick={() => handleDelete(document)}
+                        disabled={deletingId === document.id}
+                      >
+                        {deletingId === document.id ? 'Deleting…' : 'Delete'}
+                      </button>
+                    )}
+                  </div>
                 </footer>
               </li>
             )

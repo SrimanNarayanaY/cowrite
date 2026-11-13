@@ -6,7 +6,7 @@
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-blue)
 ![Docker](https://img.shields.io/badge/docker%20compose-ready-blue)
-![Tests](https://img.shields.io/badge/tests-47%20passing-success)
+![Tests](https://img.shields.io/badge/tests-52%20passing-success)
 
 ---
 
@@ -40,7 +40,7 @@ Cowrite is a collaborative document editor. This repository is its **REST API**:
 
 The codebase is organised **by feature** (not by layer), so a feature is one folder: entity, repository, service, controller, DTOs and exceptions live together. Adding a feature means adding one package, not touching four `controller/`, `service/`, `repository/`, `dto/` folders.
 
-**Current status:** authentication, document CRUD, and role-based sharing are complete and covered by integration tests. Real-time collaboration (WebSocket/CRDT) is on the roadmap.
+**Current status:** authentication, document CRUD, role-based sharing, and a rich-text editor with debounced auto-save and optimistic concurrency control are complete and covered by integration tests. Real-time collaboration (WebSocket/CRDT) is on the roadmap.
 
 ---
 
@@ -82,6 +82,7 @@ The codebase is organised **by feature** (not by layer), so a feature is one fol
 | **TypeScript** | 5.x | Request/response types mirror the backend DTO records |
 | **Vite** | 8.x | Instant dev server (`localhost:5173`) and production build |
 | **React Router / Axios** | 7.x / 1.x | Protected routes; one axios instance with auth interceptors |
+| **Tiptap / ProseMirror** | 3.x | Headless rich-text editor; content stored as Tiptap JSON |
 
 **Deliberately not used:** `ddl-auto=update` (unreviewable schema drift), raw `System.out` logging (SLF4J via Boot), a separate `controller/ service/ repository/` layering (feature packages scale better), password hashing in application code (delegated to `PasswordEncoder`).
 
@@ -102,10 +103,11 @@ com.sriman.cowrite
 │   ├── DocumentRepository.java       # @EntityGraph queries, accessible-documents JPQL
 │   ├── DocumentService.java          # data access only — no authorization logic
 │   ├── DocumentController.java
-│   ├── dto/  DocumentRequest, DocumentResponse
-│   └── exception/ DocumentNotFoundException
+│   ├── dto/  DocumentRequest, DocumentContentRequest, DocumentResponse, DocumentDetailResponse
+│   └── exception/ DocumentNotFoundException, DocumentVersionConflictException
 ├── permission/                       # feature: sharing + RBAC
 │   ├── DocumentRole.java             # VIEWER, EDITOR (owner is never stored here)
+│   ├── DocumentAccess.java           # OWNER, EDITOR, VIEWER — what the caller actually is
 │   ├── DocumentPermission.java       # @Entity, unique(document_id, user_id)
 │   ├── DocumentPermissionRepository.java
 │   ├── PermissionService.java        # isOwner / canView / canEdit + requireView / requireEdit / requireOwner
@@ -140,7 +142,8 @@ users                               documents
 id            BIGSERIAL PK          id          BIGSERIAL PK
 email         VARCHAR UNIQUE        title       VARCHAR(200) NOT NULL
 password_hash VARCHAR NOT NULL      content     TEXT
-created_at    TIMESTAMPTZ           created_at  TIMESTAMPTZ NOT NULL
+created_at    TIMESTAMPTZ           version     BIGINT NOT NULL DEFAULT 0
+                                    created_at  TIMESTAMPTZ NOT NULL
                                     updated_at  TIMESTAMPTZ NOT NULL
                                     owner_id    BIGINT ─┐
                                                         │ FK -> users(id)
@@ -160,6 +163,7 @@ UNIQUE (document_id, user_id)
 - The composite unique constraint means a user holds at most one role per document; re-sharing updates the role instead of duplicating the grant.
 - Roles are stored with `@Enumerated(EnumType.STRING)`. `ORDINAL` would silently re-point existing rows if enum constants were ever reordered.
 - `created_at` / `updated_at` are managed by `@PrePersist` / `@PreUpdate` — no controller or service can forget them.
+- `documents.version` is the JPA `@Version` column. Hibernate adds it to every `UPDATE … WHERE version = ?` and increments it, so a writer working from stale data updates zero rows instead of silently overwriting a newer save.
 
 Migrations (`src/main/resources/db/migration`):
 
@@ -169,6 +173,7 @@ Migrations (`src/main/resources/db/migration`):
 | V2 | `V2__create_users.sql` | `users` table |
 | V3 | `V3__add_owner_to_documents.sql` | `owner_id` FK + index |
 | V4 | `V4__create_document_permissions.sql` | shares: table, unique constraint, `user_id` index |
+| V5 | `V5__add_version_to_documents.sql` | optimistic-locking `version` column |
 
 ---
 
@@ -286,8 +291,9 @@ Base URL: `http://localhost:8080`
 | `POST` | `/api/auth/login` | public | `200` | returns `{ "token": "..." }` |
 | `POST` | `/api/documents` | Bearer | `201` | owner = token subject; `Location` header |
 | `GET` | `/api/documents` | Bearer | `200` | paginated; owned **and** shared documents |
-| `GET` | `/api/documents/{id}` | Bearer | `200` | owner / editor / viewer; else `403`, missing → `404` |
-| `PUT` | `/api/documents/{id}` | Bearer | `200` | owner or editor; viewer → `403` |
+| `GET` | `/api/documents/{id}` | Bearer | `200` | owner / editor / viewer; else `403`, missing → `404`; returns `version`, `access`, `canEdit` |
+| `PUT` | `/api/documents/{id}` | Bearer | `200` | owner or editor; viewer → `403` (metadata update) |
+| `PUT` | `/api/documents/{id}/content` | Bearer | `200` | owner/editor; body `{ content, version }`; stale version → `409` |
 | `DELETE` | `/api/documents/{id}` | Bearer | `204` | owner only; editor/viewer → `403` |
 | `POST` | `/api/documents/{id}/share` | Bearer | `200` | owner only; `{ email, role }` |
 
@@ -340,6 +346,7 @@ Content-Type: application/json
   "id": 1,
   "title": "Design notes",
   "content": "Initial draft of the document.",
+  "version": 0,
   "ownerId": 1,
   "ownerEmail": "alice@example.com",
   "createdAt": "2026-11-02T06:15:42.123456Z",
@@ -347,7 +354,7 @@ Content-Type: application/json
 }
 ```
 
-`title`: required, max 200 characters. `content`: optional, may be `null`.
+`title`: required, max 200 characters. `content`: optional, may be `null`. New documents start at `version: 0`.
 
 ### List documents
 
@@ -368,6 +375,48 @@ Content-Type: application/json
 DELETE /api/documents/1
 Authorization: Bearer <token>
 ```
+
+`PUT /{id}` updates metadata infrequently and is last-write-wins. The editor uses the content endpoint below, which adds concurrency control.
+
+### Save editor content (optimistic locking)
+
+The web client stores the serialized Tiptap document and sends the **version it last read**:
+
+```http
+PUT /api/documents/1/content
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "content": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}]}",
+  "version": 3
+}
+```
+
+```json
+{
+  "id": 1,
+  "title": "Design notes",
+  "content": "{\"type\":\"doc\",\"content\":[…]}",
+  "version": 4,
+  "ownerId": 1,
+  "ownerEmail": "alice@example.com",
+  "createdAt": "2026-11-02T06:15:42.123456Z",
+  "updatedAt": "2026-11-02T06:20:10.987654Z"
+}
+```
+
+`content` is opaque to the backend: the editor can change its internal format without a schema migration. `version` is not opaque — it is the concurrency control:
+
+| Sent version | Current version | Result |
+|---|---|---|
+| `3` | `3` | `200`, response carries `4` — use it for the next save |
+| `3` | `4` | **`409 Conflict`** — someone saved first |
+| missing | — | `400` validation error |
+
+Why both an explicit check and `@Version`? Two tabs can both read version `3` before either saves. Both requests pass the service's comparison, so the database is the final judge: Hibernate runs `UPDATE … WHERE version = 3`, which succeeds once and affects **zero rows** the second time. The loser gets `409` instead of overwriting the winner. The client must show "Document changed elsewhere" and reload — retrying the same stale payload would fail forever.
+
+`GET /api/documents/{id}` returns the caller's `access` (`OWNER` / `EDITOR` / `VIEWER`) and `canEdit`, so the UI can render a read-only editor for viewers instead of guessing from `ownerEmail`.
 
 ### Share a document
 
@@ -474,7 +523,7 @@ cd backend
 ```
 
 ```
-Tests run: 47, Failures: 0, Errors: 0 — BUILD SUCCESS
+Tests run: 52, Failures: 0, Errors: 0 — BUILD SUCCESS
 ```
 
 | Suite | Tests | What it proves |
@@ -482,6 +531,7 @@ Tests run: 47, Failures: 0, Errors: 0 — BUILD SUCCESS
 | `AuthApiIntegrationTest` | 12 | BCrypt hash & salt, register validation, 409, JWT login, claims contain no secrets, tampered / malformed / expired token → 401, protected endpoint needs auth |
 | `DocumentApiIntegrationTest` | 5 | Full CRUD over HTTP with a real JWT, pagination envelope, a stranger's document → `403`, list is scoped |
 | `DocumentSharingIntegrationTest` | 5 | Owner shares; viewer reads but cannot update/delete/re-share (`403`); editor updates but cannot delete/share; role upgrade takes effect; self-share `400`; unknown email `404`; deleting a document removes its shares |
+| `DocumentVersioningIntegrationTest` | 5 | Save returns the next version; reusing a stale version → `409`; retry with the fresh version succeeds; viewer save → `403`; editor save → `200`; detail exposes `access` / `canEdit`; missing fields → `400` |
 | `PermissionServiceTest` | 11 | `isOwner` / `canView` / `canEdit` for owner, editor, viewer, stranger; `require*` throws `PermissionDeniedException` (`403`) or `DocumentNotFoundException` (`404`) correctly (Mockito) |
 | `DocumentServiceTest` | 6 | Owner taken from the principal, accessible-page mapping, exception paths, shares removed before delete (Mockito) |
 | `CorsIntegrationTest` | 4 | Preflight from `http://localhost:5173` succeeds without a token (not `401`), allows `POST`/`Authorization`, real requests carry `Access-Control-Allow-Origin`, unknown origins get `403` |
@@ -490,9 +540,9 @@ Tests run: 47, Failures: 0, Errors: 0 — BUILD SUCCESS
 
 Tests run against **H2 in PostgreSQL mode** (`src/test/resources/application-test.properties`), so no database or network is required. DevTools is automatically disabled in tests.
 
-The Docker path was also verified end-to-end: `docker compose up` applies V1–V4 on a fresh PostgreSQL, then a scripted run exercised register → login → create → share (`VIEWER`/`EDITOR`) → viewer `PUT` `403` → editor `PUT` `200` → editor `DELETE` `403` → owner `DELETE` `204`.
+The Docker path was also verified end-to-end: `docker compose up` applies V1–V5 on a fresh PostgreSQL, then a scripted run exercised register → login → create → share (`VIEWER`/`EDITOR`) → viewer `PUT` `403` → editor `PUT` `200` → editor `DELETE` `403` → owner `DELETE` `204`.
 
-The browser flow is covered separately by `frontend/scripts/smoke.mjs` (Playwright, real Chrome): register → reload keeps the session → create → another user's list does not contain the document → delete → logout → protected route redirect.
+The browser flow is covered separately by `frontend/scripts/smoke.mjs` (Playwright, real Chrome): register → reload keeps the session → create → open the editor → debounced auto-save → reload keeps the text → a second tab gets `409` → a viewer opens the same document read-only → delete → logout → protected route redirect.
 
 ---
 
@@ -606,7 +656,7 @@ A ready-to-run collection lives in [`docs/postman/Cowrite-RBAC.postman_collectio
 npx newman run docs/postman/Cowrite-RBAC.postman_collection.json
 ```
 
-Expected: `22 requests, 28 assertions, 0 failing`.
+Expected: `27 requests, 40 assertions, 0 failing`.
 
 Step by step, with three users (`owner@test.com`, `viewer@test.com`, `editor@test.com`, password `password123`):
 
@@ -630,6 +680,18 @@ Step by step, with three users (`owner@test.com`, `viewer@test.com`, `editor@tes
 | 16 | `PUT /api/documents/{id}` (viewer, now upgraded) | `{"title":"promoted viewer edit"}` | `200` (role change took effect) |
 | 17 | `DELETE /api/documents/{id}` (owner) | — | `204` |
 | 18 | `GET /api/documents/{id}` (viewer) | — | **`404`** (share removed with the document) |
+
+The third folder, **3. Content versioning**, demonstrates optimistic locking on a document it creates and deletes itself:
+
+| Request | Version sent | Expected |
+|---|---|---|
+| `POST /api/documents` (owner) | — | `201`, `version: 0` |
+| `PUT /api/documents/{id}/content` | `0` | `200`, `version: 1` |
+| replay the same save (the "other tab") | `0` | **`409`** |
+| retry with the reloaded version | `1` | `200`, `version: 2` |
+| `DELETE /api/documents/{id}` | — | `204` |
+
+To reproduce it by hand, copy the save request into two Postman tabs and press *Send* in both with the same `version` — one succeeds, the other gets `409`.
 
 In Postman, set the token per request under **Authorization → Bearer Token** (or send `Authorization: Bearer <token>` manually).
 
@@ -670,7 +732,7 @@ How it is wired:
 | `backend/Dockerfile` | Multi-stage: Maven build → `eclipse-temurin:21-jre-alpine` runtime, runs as a non-root `app` user |
 | `.dockerignore` | Keeps `target/` and `.env` out of the build context |
 | Health gating | the app starts only after `pg_isready` marks the database healthy |
-| Schema | `SPRING_FLYWAY_ENABLED=true` in Compose, so V1–V4 run on the fresh database |
+| Schema | `SPRING_FLYWAY_ENABLED=true` in Compose, so V1–V5 run on the fresh database |
 | TLS | `DB_SSLMODE=disable` for the local container; hosted databases keep `require` |
 | Host port | published on `55432`, because `5432` / `5433` are already used by local PostgreSQL installs on this machine. Inside the Compose network the API still talks to `db:5432` |
 
@@ -705,6 +767,7 @@ npm run dev                       # http://localhost:5173
 | `/login` | `POST /api/auth/login`, stores the JWT |
 | `/register` | `POST /api/auth/register`, then logs in automatically |
 | `/docs` | paginated list (own + shared), create modal, delete (owner only) |
+| `/docs/:id` | rich-text editor: auto-save, conflict handling, read-only for viewers |
 | `/todo` | Step 2 playground: `useState` / `useEffect` **with cleanup** |
 
 - `ProtectedRoute` redirects to `/login` when no token is stored; `/login` and `/register` redirect away when a session exists.
@@ -737,6 +800,7 @@ main.tsx                  mounts <App /> into #root
             └── Routes
                 ├── /login, /register   → PublicOnlyRoute
                 ├── /docs, /todo        → ProtectedRoute → Layout → <Outlet />
+                ├── /docs/:id           → lazy-loaded editor route
                 └── /                   → <Navigate to="/docs" />
 ```
 
@@ -939,7 +1003,53 @@ if (data && data.content.length === 1 && !data.first) {
 
 Without that branch, deleting the only row of page 3 would leave the user on an empty page after `totalPages` had already shrunk to 2.
 
-#### Step 9 — Logging out, and the global `401` path
+#### Step 9 — Editing a document
+
+Clicking a card's title or **Open** navigates to `/docs/:id`. The route is **lazy-loaded**:
+
+```tsx
+const DocumentEditorPage = lazy(() =>
+  import('./pages/DocumentEditorPage').then((module) => ({ default: module.DocumentEditorPage })),
+)
+```
+
+Tiptap + ProseMirror are the heaviest dependency in the app (~410 kB), and most visits only look at the list, so only readers who open a document download the editor. The production build therefore has two chunks: `index` and `DocumentEditorPage`.
+
+The page fetches `GET /api/documents/:id` and renders `<DocumentEditor>`. That response (`DocumentDetail`) adds three fields the list does not return:
+
+| Field | Why the editor needs it |
+|---|---|
+| `version` | sent back on every save so the server can reject stale writes |
+| `access` | `OWNER` / `EDITOR` / `VIEWER` |
+| `canEdit` | `editable: false` for a viewer; the toolbar is disabled too |
+
+**Loading the content.** The server stores the string produced by `editor.getJSON()`. `lib/content.ts` parses it and falls back to wrapping plain text in paragraphs, so documents created before the editor — and documents created through the create dialog — still open with their text intact.
+
+**Saving: debounce.** Typing does not call the API. `onUpdate` schedules a save one second after the last keystroke:
+
+```tsx
+timerRef.current = window.setTimeout(() => void persist(content), 1000)
+```
+
+Every new keystroke clears the previous timer, so a 40-character sentence produces one request, not 40. The cleanup in `useEffect` clears the timer if the user leaves before the second passes. That is the debounce concept in one sentence: **wait for silence, then act once**.
+
+**Saving: one request at a time.** Two overlapping saves could return out of order and let an older payload win. `inFlightRef` blocks a second request; edits that arrive meanwhile replace a single `queuedRef` payload, which is sent when the current request finishes:
+
+```
+keystroke → debounce 1s → save(version 3) → 200, version 4
+keystroke while saving → queued
+                                        → save(queued, version 4) → 200, version 5
+```
+
+The version returned by each response updates `versionRef` **before** the queued save is sent. Miss that line and the second save reuses version 3 and receives `409`.
+
+**The 409 path.** A save of the same document from another tab (or another user) makes the server's version newer than ours. The editor shows "Document changed elsewhere" and a **Reload** button, and stops scheduling saves until reload — retrying the same rejected payload would fail forever. Reload remounts the editor with fresh content and the current version.
+
+**Read-only viewers.** `DocumentEditorPage` passes `document.canEdit` into `editable`, so ProseMirror itself rejects typing (not just CSS), and every toolbar button is `disabled`. This is UX; the backend still returns `403` for `PUT /content` from a viewer.
+
+The editor body is plain ProseMirror HTML inside `.editor-body`, styled in `index.css`; no UI component library is involved. The indicator in the footer reports `Saving…`, `Saved`, or the error.
+
+#### Step 10 — Logging out, and the global `401` path
 
 The top bar's **Log out** calls `logout()` (`clearToken()` + `setSession(null)`) and navigates to `/login`. Even if the navigation were skipped, `ProtectedRoute` would redirect on the next render because the session is gone.
 
@@ -957,6 +1067,10 @@ Browser loads /
                                           ← 200 PageResponse
                                           → cards + pagination
   → "New document" → dialog → POST /api/documents → reload → GET again
+  → Open a card → /docs/:id → GET /api/documents/:id
+                   → type → debounce 1s → PUT /api/documents/:id/content
+                                         ← 200 { version: n+1 }
+                                         ← 409 → "Document changed elsewhere" → Reload
   → Log out (or a 401) → token cleared → /login
 ```
 
@@ -967,6 +1081,7 @@ Browser loads /
 3. **Session state is global, screen state is local.** Only what the whole app needs (who is signed in) goes into context.
 4. **The guard is UX; the API is security.** Hiding a button is not authorization.
 5. **Effects start I/O; handlers set flags.** That is what keeps `useEffect` from looping.
+6. **The version travels with the save.** The client sends the version it read; a mismatch is a `409`, not a silent overwrite. Real-time CRDT later replaces this with per-character merging, but optimistic locking is the correct first step.
 
 ### Verified in a real browser
 
@@ -975,7 +1090,7 @@ cd frontend
 npm run smoke        # Playwright + the installed Chrome
 ```
 
-10 checks: register → session survives a reload → create → **a second user cannot see the document** → delete → logout → `/docs` redirects to `/login`. The backend suite (47 tests) and this browser smoke test are both green.
+19 checks: register → session survives a reload → create → open the editor → **debounced save reports Saved** → text survives a reload → **a stale second tab gets `409`** → **a viewer opens the document read-only** → delete → logout → `/docs` redirects to `/login`. The backend suite (52 tests) and this browser smoke test are both green.
 
 ### CORS
 
@@ -998,7 +1113,7 @@ plus `.cors(Customizer.withDefaults())` on the security chain. Without that, the
 | `spring.datasource.*` | from `.env` | `?sslmode=${DB_SSLMODE:require}` — override with `disable` for local Postgres |
 | `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate **never** changes the schema |
 | `spring.jpa.show-sql` | `true` | dev only |
-| `spring.flyway.enabled` | `false` | set `true` to let Flyway manage the schema (Docker Compose does) |
+| `spring.flyway.enabled` | `true` | Flyway applies V1–V5; Docker Compose also enables it |
 | `jwt.secret` | `${JWT_SECRET}` | required, ≥ 32 bytes |
 | `jwt.expiration` | `${JWT_EXPIRATION:3600000}` | milliseconds |
 | `app.cors.allowed-origins` | `${CORS_ALLOWED_ORIGINS:http://localhost:5173,...}` | comma-separated browser origins; never `*` |
@@ -1021,6 +1136,9 @@ plus `.cors(Customizer.withDefaults())` on the security chain. Without that, the
 | `@Enumerated(EnumType.STRING)` for roles | Reordering enum constants can never corrupt stored roles |
 | Shutting the document delete path to the owner only | Editing content and administering access are different powers |
 | `@EntityGraph` on read queries | N+1 fix with one annotation; no custom JPQL duplication |
+| `@Version` + client-sent version on save | Last-write-wins would silently delete a collaborator's paragraph; `409` makes the conflict visible |
+| Debounced auto-save with an in-flight queue | One request per typing pause, and responses cannot reorder to overwrite newer text |
+| `access` / `canEdit` on the detail response only | The editor needs the caller's role; adding it to the list would cost one permission query per row |
 | `PageResponse<T>` envelope instead of raw `Page` | Stable JSON contract, no Spring-internals leakage, no Boot warning |
 | `ddl-auto=validate` + Flyway | Schema changes are versioned and reviewable |
 | BCrypt via `PasswordEncoder` bean | Salt + work factor handled by one battle-tested implementation |
@@ -1035,9 +1153,9 @@ plus `.cors(Customizer.withDefaults())` on the security chain. Without that, the
 - [x] Document sharing and role-based access (`viewer` / `editor` / `owner`)
 - [x] Docker Compose for local Postgres + API
 - [x] React web client: auth, protected routes, paginated list, create/delete (Milestone 1)
-- [ ] Frontend: document editing and sharing UI (API already supports both)
+- [x] Frontend: rich-text editor, debounced auto-save, `409` conflict handling, read-only viewers
+- [ ] Frontend: sharing UI (the API supports both; today sharing is done with Postman)
 - [ ] Frontend: refresh-token flow instead of a long-lived `localStorage` token
-- [ ] Return the caller's effective role in `DocumentResponse` (needs a projection to stay N+1-free)
 - [ ] Refresh tokens + logout (token revocation / denylist)
 - [ ] Real-time collaboration over WebSocket (CRDT-based editing) — reuses `PermissionService`
 - [ ] `documents.owner_id` → `NOT NULL` after backfill

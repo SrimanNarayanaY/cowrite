@@ -11,6 +11,7 @@ React + TypeScript frontend for the Cowrite API (Spring Boot, see [`../backend`]
 | **Vite** | Instant dev server + production build |
 | **React Router** | `/login`, `/register`, `/docs`, protected routes |
 | **Axios** | One instance with request/response interceptors (Bearer token, 401 handling) |
+| **Tiptap 3** | Headless rich text (bold, italic, headings) stored as JSON |
 | **Plain CSS** | No UI framework: the layout is small enough to keep readable |
 
 ## Quick start
@@ -58,7 +59,7 @@ host and **ignore the port**, so a credential saved for another project on
 | `npm run build` | Type-check (`tsc -b`) + production bundle in `dist/` |
 | `npm run preview` | Serve the built bundle locally |
 | `npm run lint` | ESLint (React hooks + Fast Refresh rules) |
-| `npm run smoke` | Playwright browser test of Milestone 1 (needs the API + dev server running; uses installed Chrome, no browser download) |
+| `npm run smoke` | Playwright browser test of the full flow (needs the API + dev server running; uses installed Chrome, no browser download) |
 
 ## Structure
 
@@ -75,14 +76,18 @@ src/
 │   ├── auth-context.ts          # context object + type
 │   ├── AuthProvider.tsx         # session state, login/register/logout
 │   └── useAuth.ts               # hook
+├── lib/
+│   └── content.ts               # Tiptap JSON parse + plain-text preview
 ├── components/
 │   ├── Layout.tsx               # top bar, nav, logout
 │   ├── ProtectedRoute.tsx       # ProtectedRoute + PublicOnlyRoute
-│   └── CreateDocumentDialog.tsx # modal form (useState + cleanup)
+│   ├── CreateDocumentDialog.tsx # modal form (useState + cleanup)
+│   └── DocumentEditor.tsx       # Tiptap, debounced save, 409 banner
 └── pages/
     ├── LoginPage.tsx
     ├── RegisterPage.tsx
     ├── DocumentsPage.tsx        # list + create + delete + pagination
+    ├── DocumentEditorPage.tsx   # /docs/:id: fetch detail, reload
     ├── TodoPage.tsx             # Step 2: useState/useEffect playground
     └── NotFoundPage.tsx
 ```
@@ -95,7 +100,7 @@ src/
    `Authorization: Bearer <token>` — components never handle headers.
 4. A `401` response **while a token exists** clears it and redirects to `/login`.
    A `401` from a login attempt does not redirect; it shows "Invalid credentials".
-5. `/docs` and `/todo` are wrapped in `ProtectedRoute`; `/login` and `/register`
+5. `/docs`, `/docs/:id` and `/todo` are wrapped in `ProtectedRoute`; `/login` and `/register`
    redirect away when already authenticated.
 
 **Known trade-off:** `localStorage` is readable by any script on the page, so an XSS
@@ -106,10 +111,22 @@ project the simpler choice is documented, not hidden.
 The JWT payload is decoded only to show the signed-in email. That is **not**
 verification — the server verifies the signature on every request.
 
-For the full journey — startup, guards, the list request, the create dialog, pagination
-and logout, with the file that implements each step — see
+For the full journey — startup, guards, the list request, the create dialog, pagination,
+the editor and logout, with the file that implements each step — see
 [**How the UI works, end to end**](../README.md#how-the-ui-works-end-to-end) in the root
 README.
+
+## Document editor
+
+`/docs/:id` is lazy-loaded so the list page does not download Tiptap. The editor sends the
+version it read with every save; the server answers `200` with the next version or `409`
+when another tab/user saved first. A `409` stops auto-save and shows **Reload**, because
+retrying the same stale payload can never succeed. Viewers get `editable: false` from
+`canEdit` — the API still enforces `403` on `PUT /content`.
+
+The interesting parts, in order: `lib/content.ts` (old plain-text fallback),
+`components/DocumentEditor.tsx` (debounce + single in-flight request + queue),
+`pages/DocumentEditorPage.tsx` (fetch, `access`, remount on reload).
 
 ## Step 2 — React playground (`/todo`)
 
@@ -123,7 +140,7 @@ The `/todo` page is the deliberate warm-up before touching the API:
 The Documents page reuses the same shapes: `useState` for form + modal, `useEffect`
 with an `AbortController` cleanup for fetching.
 
-## Milestone 1 checklist
+## Feature checklist
 
 - [x] Register and log in from the browser
 - [x] Document list is paginated (`Previous` / `Next`)
@@ -133,14 +150,20 @@ with an `AbortController` cleanup for fetching.
 - [x] A different user sees only their own documents (plus documents shared with them)
 - [x] Deep link to `/docs` without a token redirects to `/login`
 - [x] Expired/invalid token → automatic logout and redirect
+- [x] Open a document in a Tiptap editor with bold / italic / H1 / H2
+- [x] Debounced auto-save (~1 s) with a Saving / Saved indicator
+- [x] Optimistic locking: a stale tab gets `409` and a Reload action
+- [x] A viewer opens the same document read-only (toolbar disabled)
+- [x] Documents created before the editor still open (plain-text fallback)
 
-Verified with `npm run smoke` — 10 Playwright checks in real Chrome (register, reload
-with a stored session, create, cross-user isolation, delete, logout, protected route).
+Verified with `npm run smoke` — 19 Playwright checks in real Chrome (register, reload with
+a stored session, create, auto-save, reload persistence, two-tab `409`, viewer read-only,
+delete, logout, protected route).
 
 ## What is not built yet
 
-- Document editing UI (the API supports `PUT` for owner/editor)
-- Sharing UI (the API supports `POST /api/documents/{id}/share`)
+- Sharing UI (the API supports `POST /api/documents/{id}/share`; use Postman for now)
+- Title editing from the editor (`PUT /api/documents/{id}` supports it)
 - Refresh tokens / silent renewal
 - Optimistic updates (the list refetches after create/delete)
 

@@ -1,8 +1,11 @@
 package com.sriman.cowrite.document;
 
 import com.sriman.cowrite.common.web.PageResponse;
+import com.sriman.cowrite.document.dto.DocumentContentRequest;
+import com.sriman.cowrite.document.dto.DocumentDetailResponse;
 import com.sriman.cowrite.document.dto.DocumentRequest;
 import com.sriman.cowrite.document.dto.DocumentResponse;
+import com.sriman.cowrite.permission.DocumentAccess;
 import com.sriman.cowrite.permission.PermissionService;
 import com.sriman.cowrite.user.User;
 import jakarta.validation.Valid;
@@ -57,10 +60,10 @@ public class DocumentController {
 	}
 
 	@GetMapping("/{id}")
-	public DocumentResponse getById(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
-		permissionService.requireView(id, currentUser.getId());
+	public DocumentDetailResponse getById(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
+		DocumentAccess access = permissionService.accessLevel(id, currentUser.getId());
 
-		return documentService.getById(id);
+		return documentService.getDetail(id, access);
 	}
 
 	@PutMapping("/{id}")
@@ -70,6 +73,20 @@ public class DocumentController {
 		permissionService.requireEdit(id, currentUser.getId());
 
 		return documentService.update(id, request);
+	}
+
+	/**
+	 * Editor save. Separate from {@code PUT /{id}} because the title/metadata update
+	 * and the high-frequency content save have different shapes: this one requires the
+	 * version the client last saw and returns the new one.
+	 */
+	@PutMapping("/{id}/content")
+	public DocumentResponse updateContent(@AuthenticationPrincipal User currentUser,
+										  @PathVariable Long id,
+										  @Valid @RequestBody DocumentContentRequest request) {
+		permissionService.requireEdit(id, currentUser.getId());
+
+		return documentService.updateContent(id, request);
 	}
 
 	@DeleteMapping("/{id}")

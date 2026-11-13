@@ -14,10 +14,19 @@ export interface DocumentSummary {
   id: number
   title: string
   content: string | null
+  version: number
   ownerId: number | null
   ownerEmail: string | null
   createdAt: string
   updatedAt: string
+}
+
+export type DocumentAccess = 'OWNER' | 'EDITOR' | 'VIEWER'
+
+/** Detail response: the editor also needs the caller's access level. */
+export interface DocumentDetail extends DocumentSummary {
+  access: DocumentAccess
+  canEdit: boolean
 }
 
 export interface PageResponse<T> {

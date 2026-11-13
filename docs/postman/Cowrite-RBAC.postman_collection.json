@@ -14,7 +14,10 @@
     { "key": "ownerToken", "value": "" },
     { "key": "viewerToken", "value": "" },
     { "key": "editorToken", "value": "" },
-    { "key": "docId", "value": "" }
+    { "key": "docId", "value": "" },
+    { "key": "versionDocId", "value": "" },
+    { "key": "staleVersion", "value": "0" },
+    { "key": "contentVersion", "value": "0" }
   ],
   "item": [
     {
@@ -373,6 +376,109 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{viewerToken}}" }],
             "url": { "raw": "{{baseUrl}}/api/documents/{{docId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{docId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Content versioning (optimistic locking)",
+      "item": [
+        {
+          "name": "Create versioning document (owner)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created', function () { pm.response.to.have.status(201); });",
+              "const body = pm.response.json();",
+              "pm.test('new document starts at version 0', function () { pm.expect(body.version).to.eql(0); });",
+              "pm.collectionVariables.set('versionDocId', body.id);",
+              "pm.collectionVariables.set('staleVersion', body.version);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Versioning demo\",\n  \"content\": null\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents", "host": ["{{baseUrl}}"], "path": ["api", "documents"] }
+          }
+        },
+        {
+          "name": "Save content with the current version (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "const body = pm.response.json();",
+              "const sent = Number(pm.collectionVariables.get('staleVersion'));",
+              "pm.test('version incremented by one', function () { pm.expect(body.version).to.eql(sent + 1); });",
+              "pm.test('content was stored', function () { pm.expect(body.content).to.include('first-save'); });",
+              "pm.collectionVariables.set('contentVersion', body.version);"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"{\\\"type\\\":\\\"doc\\\",\\\"content\\\":[{\\\"type\\\":\\\"paragraph\\\",\\\"content\\\":[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"first-save\\\"}]}]}\",\n  \"version\": {{staleVersion}}\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{versionDocId}}/content", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{versionDocId}}", "content"] }
+          }
+        },
+        {
+          "name": "Replay the same version from a stale tab (409)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('409 Conflict', function () { pm.response.to.have.status(409); });",
+              "const body = pm.response.json();",
+              "pm.test('error is Conflict', function () { pm.expect(body.error).to.eql('Conflict'); });",
+              "pm.test('message tells the client to reload', function () { pm.expect(body.message).to.include('changed by someone else'); });"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"{\\\"type\\\":\\\"doc\\\",\\\"content\\\":[{\\\"type\\\":\\\"paragraph\\\",\\\"content\\\":[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"stale-tab\\\"}]}]}\",\n  \"version\": {{staleVersion}}\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{versionDocId}}/content", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{versionDocId}}", "content"] }
+          }
+        },
+        {
+          "name": "Retry with the fresh version (200)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "const body = pm.response.json();",
+              "const expected = Number(pm.collectionVariables.get('contentVersion')) + 1;",
+              "pm.test('version incremented by one', function () { pm.expect(body.version).to.eql(expected); });",
+              "pm.test('content was stored', function () { pm.expect(body.content).to.include('after-reload'); });",
+              "pm.collectionVariables.set('contentVersion', body.version);"
+            ] } }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{ownerToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"{\\\"type\\\":\\\"doc\\\",\\\"content\\\":[{\\\"type\\\":\\\"paragraph\\\",\\\"content\\\":[{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"after-reload\\\"}]}]}\",\n  \"version\": {{contentVersion}}\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{baseUrl}}/api/documents/{{versionDocId}}/content", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{versionDocId}}", "content"] }
+          }
+        },
+        {
+          "name": "Delete versioning document (owner)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('204 No Content', function () { pm.response.to.have.status(204); });"
+            ] } }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ownerToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/documents/{{versionDocId}}", "host": ["{{baseUrl}}"], "path": ["api", "documents", "{{versionDocId}}"] }
           }
         }
       ]
